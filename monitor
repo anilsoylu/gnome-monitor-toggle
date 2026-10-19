@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""monitor -- GNOME/Wayland monitör aç/kapat (komut satırı).
+
+  monitor list                 # bağlı monitörler
+  monitor off DP-1 [--persist] # monitörü kapat
+  monitor on  [DP-1] [--persist]  # monitörü (ya da hepsini) aç
+"""
+import argparse
+import sys
+
+import monitorctl
+
+
+def cmd_list():
+    _serial, monitors, logicals, _props = monitorctl.get_state()
+    enabled = monitorctl.enabled_map(logicals)
+    print("Bağlı monitörler:")
+    for ident, _modes, _props in monitors:
+        conn, vendor, product, _sn = ident
+        mode = monitorctl.current_mode(monitors, conn)
+        res = f"{mode[1]}x{mode[2]}" if mode else "-"
+        on = conn in enabled
+        prim = " (primary)" if enabled.get(conn, (0, 0, False))[2] else ""
+        state = "AÇIK " if on else "kapalı"
+        print(f"  {'*' if on else ' '} {conn:<6} {vendor} {product:<14} {state} {res}{prim}")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="monitor", description=__doc__)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("list", help="bağlı monitörleri listeler")
+
+    p_off = sub.add_parser("off", help="bir monitörü kapatır")
+    p_off.add_argument("connector", help="örn: DP-1, HDMI-A-1")
+    p_off.add_argument("--persist", action="store_true", help="yeniden girişte de kapalı kalsın")
+
+    p_on = sub.add_parser("on", help="monitörü (argümansız: hepsini) açar")
+    p_on.add_argument("connector", nargs="?", help="örn: DP-1 (boş bırakılırsa tümü)")
+    p_on.add_argument("--persist", action="store_true", help="kalıcı olarak aç")
+
+    args = ap.parse_args()
+    try:
+        if args.cmd == "list":
+            cmd_list()
+        elif args.cmd == "off":
+            monitorctl.set_enabled(args.connector, False, persist=args.persist)
+            print(f"{args.connector} kapatıldı. Geri açmak için:  monitor on {args.connector}")
+        elif args.cmd == "on":
+            if args.connector:
+                monitorctl.set_enabled(args.connector, True, persist=args.persist)
+                print(f"{args.connector} açıldı.")
+            else:
+                monitorctl.enable_all(persist=args.persist)
+                print("Tüm monitörler açıldı.")
+    except Exception as exc:  # noqa: BLE001
+        sys.exit(f"Hata: {exc}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""monitor-ui -- Monitörleri açıp kapatmak için basit GTK4/libadwaita arayüzü."""
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, GLib, Gtk  # noqa: E402
+
+import monitorctl  # noqa: E402
+
+APP_ID = "io.github.anilsoylu.MonitorToggle"
+
+
+class Window(Adw.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title="Monitörler")
+        self.set_default_size(470, 430)
+
+        self._p = monitorctl.proxy()
+        self._rows = []
+        self._populating = False
+        self._busy = False
+
+        header = Adw.HeaderBar()
+
+        btn_all = Gtk.Button(label="Hepsini Aç")
+        btn_all.set_tooltip_text("Bağlı tüm monitörleri aç")
+        btn_all.add_css_class("flat")
+        btn_all.connect("clicked", self._on_all_on)
+        header.pack_start(btn_all)
+
+        btn_refresh = Gtk.Button(icon_name="view-refresh-symbolic")
+        btn_refresh.set_tooltip_text("Yenile")
+        btn_refresh.add_css_class("flat")
+        btn_refresh.connect("clicked", lambda *_: self.reload())
+        header.pack_end(btn_refresh)
+
+        page = Adw.PreferencesPage()
+
+        self.group = Adw.PreferencesGroup(
+            title="Bağlı Monitörler",
+            description="Kapatmak istediğin monitörün anahtarını kapat.",
+        )
+        page.add(self.group)
+
+        opt = Adw.PreferencesGroup(title="Seçenekler")
+        self.persist_row = Adw.SwitchRow(
+            title="Kalıcı olarak hatırla",
+            subtitle="Açıkken verdiğin ayar yeniden başlatınca da korunur",
+        )
+        opt.add(self.persist_row)
+        page.add(opt)
+
+        self.toasts = Adw.ToastOverlay()
+        self.toasts.set_child(page)
+
+        toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(header)
+        toolbar.set_content(self.toasts)
+        self.set_content(toolbar)
+
+        self.reload()
+
+    # ------------------------------------------------------------- yardımcı
+    def _toast(self, text):
+        self.toasts.add_toast(Adw.Toast(title=text, timeout=3))
+
+    def _clear_rows(self):
+        for row in self._rows:
+            self.group.remove(row)
+        self._rows = []
+
+    # -------------------------------------------------------------- yenile
+    def reload(self):
+        self._clear_rows()
+        try:
+            _serial, monitors, logicals, _props = monitorctl.get_state(self._p)
+        except GLib.Error as exc:
+            self._toast(f"Ekranlar okunamadı: {exc.message}")
+            return
+
+        enabled = monitorctl.enabled_map(logicals)
+        self._populating = True
+        for ident, _modes, _props in monitors:
+            conn, vendor, product, _sn = ident
+            mode = monitorctl.current_mode(monitors, conn)
+            res = f"{mode[1]}×{mode[2]}" if mode else "—"
+            marks = []
+            if enabled.get(conn, (0, 0, False))[2]:
+                marks.append("birincil")
+            if conn not in enabled:
+                marks.append("kapalı")
+            subtitle = " · ".join([f"{vendor} {product}", res, *marks])
+
+            row = Adw.SwitchRow(title=conn, subtitle=subtitle)
+            row.set_active(conn in enabled)
+            row.connect("notify::active", self._on_toggle, conn)
+            self.group.add(row)
+            self._rows.append(row)
+        self._populating = False
+
+    # ------------------------------------------------------------- eylemler
+    def _on_toggle(self, row, _pspec, conn):
+        if self._populating or self._busy:
+            return
+        self._busy = True
+        want = row.get_active()
+        try:
+            monitorctl.set_enabled(conn, want, persist=self.persist_row.get_active())
+            self._toast(f"{conn} {'açıldı' if want else 'kapatıldı'}")
+        except Exception as exc:  # noqa: BLE001
+            self._toast(f"Hata: {exc}")
+        finally:
+            self._busy = False
+            self.reload()
+
+    def _on_all_on(self, _btn):
+        if self._busy:
+            return
+        self._busy = True
+        try:
+            monitorctl.enable_all(persist=self.persist_row.get_active())
+            self._toast("Tüm monitörler açıldı")
+        except Exception as exc:  # noqa: BLE001
+            self._toast(f"Hata: {exc}")
+        finally:
+            self._busy = False
+            self.reload()
+
+
+class App(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID)
+
+    def do_activate(self):
+        win = self.props.active_window or Window(self)
+        win.present()
+
+
+if __name__ == "__main__":
+    raise SystemExit(App().run(None))

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Monitör Aç/Kapat
+Name[en]=Monitor Toggle
+Comment=Harici monitörleri açıp kapat
+Comment[en]=Turn external monitors on or off
+Exec=@EXEC@
+Icon=video-display
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=monitor;display;ekran;monitör;
+StartupNotify=true
+StartupWMClass=io.github.anilsoylu.MonitorToggle
