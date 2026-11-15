@@ -1,141 +1,451 @@
 #!/usr/bin/env python3
-"""monitor-ui -- Monitörleri açıp kapatmak için basit GTK4/libadwaita arayüzü."""
+"""monitor-ui: a GTK4/libadwaita app for turning GNOME displays on and off."""
+import sys
+
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, GLib, Gtk  # noqa: E402
+gi.require_version("Gsk", "4.0")
+gi.require_version("Graphene", "1.0")
+from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gsk, Gtk, Pango  # noqa: E402
 
 import monitorctl  # noqa: E402
+from monitorctl import _  # noqa: E402
 
 APP_ID = "io.github.anilsoylu.MonitorToggle"
+VERSION = "1.1.0"
+WEBSITE = "https://github.com/anilsoylu/gnome-monitor-toggle"
+REFRESH_DEBOUNCE_MS = 150
+SPINNER_DELAY_MS = 250
+PREVIEW_HEIGHT = 140
+PREVIEW_PADDING = 16
+PREVIEW_GAP = 3
+MIN_GTK = (4, 14)  # Gsk.PathBuilder, Gsk.Stroke
+MIN_ADW = (1, 6)  # Adw.ButtonRow, Adw.Spinner, accent colors
+
+
+def missing_requirement():
+    """None when GTK and libadwaita are new enough, otherwise a message for the user."""
+    gtk = (Gtk.get_major_version(), Gtk.get_minor_version())
+    adw = (Adw.get_major_version(), Adw.get_minor_version())
+    if gtk >= MIN_GTK and adw >= MIN_ADW:
+        return None
+    return _(
+        "Monitor Toggle needs GTK {gtk} and libadwaita {adw} or newer (GNOME 47+); found GTK {found_gtk} "
+        "and libadwaita {found_adw}. The monitor command still works."
+    ).format(
+        gtk="%d.%d" % MIN_GTK, adw="%d.%d" % MIN_ADW, found_gtk="%d.%d" % gtk, found_adw="%d.%d" % adw,
+    )
+
+
+def rgba(red, green, blue, alpha):
+    color = Gdk.RGBA()
+    color.red, color.green, color.blue, color.alpha = red, green, blue, alpha
+    return color
+
+
+class LayoutPreview(Gtk.Widget):
+    """Displays drawn at their logical positions. Off and primary are labelled, not only colored."""
+
+    def __init__(self):
+        super().__init__(
+            hexpand=True, height_request=PREVIEW_HEIGHT, accessible_role=Gtk.AccessibleRole.IMG, css_classes=["card"],
+        )
+        self._items = []
+        self._style = Adw.StyleManager.get_default()
+        self.update_property([Gtk.AccessibleProperty.LABEL], [_("Display layout")])
+
+    def set_items(self, items):
+        """items: [(connector, x, y, width, height, enabled, primary)]."""
+        self._items = items
+        self.queue_draw()
+
+    def do_snapshot(self, snapshot):
+        if not self._items:
+            return
+        width, height = self.get_width(), self.get_height()
+        left = min(i[1] for i in self._items)
+        top = min(i[2] for i in self._items)
+        span_w = max(i[1] + i[3] for i in self._items) - left
+        span_h = max(i[2] + i[4] for i in self._items) - top
+        scale = min((width - 2 * PREVIEW_PADDING) / span_w, (height - 2 * PREVIEW_PADDING) / span_h)
+        off_x = (width - span_w * scale) / 2
+        off_y = (height - span_h * scale) / 2
+
+        fg = self.get_color()
+        accent = self._style.get_accent_color_rgba()
+        high_contrast = self._style.get_high_contrast()
+        stroke = Gsk.Stroke.new(2 if high_contrast else 1)
+        stroke.set_dash([4, 3])
+
+        for conn, x, y, w, h, enabled, primary in sorted(self._items, key=lambda i: i[5]):
+            # Keep the instances: the values returned by the init_* methods are unreliable in PyGObject.
+            rect = Graphene.Rect()
+            rect.init(
+                off_x + (x - left) * scale + PREVIEW_GAP, off_y + (y - top) * scale + PREVIEW_GAP,
+                max(w * scale - 2 * PREVIEW_GAP, 1), max(h * scale - 2 * PREVIEW_GAP, 1),
+            )
+            rounded = Gsk.RoundedRect()
+            rounded.init_from_rect(rect, 6)
+            fill = accent if enabled else rgba(fg.red, fg.green, fg.blue, 0.06)
+            snapshot.push_rounded_clip(rounded)
+            snapshot.append_color(fill, rect)
+            snapshot.pop()
+            if enabled:
+                text = rgba(1, 1, 1, 1)
+            else:
+                builder = Gsk.PathBuilder.new()
+                builder.add_rounded_rect(rounded)
+                outline = rgba(fg.red, fg.green, fg.blue, 0.8 if high_contrast else 0.45)
+                snapshot.append_stroke(builder.to_path(), stroke, outline)
+                text = rgba(fg.red, fg.green, fg.blue, 0.9 if high_contrast else 0.7)
+            self._label(snapshot, rect, conn, _("Primary") if primary else ("" if enabled else _("Off")), text)
+
+    def _label(self, snapshot, rect, title, note, color):
+        markup = f"<b>{GLib.markup_escape_text(title)}</b>"
+        if note:
+            markup += f"\n<small>{GLib.markup_escape_text(note)}</small>"
+        layout = self.create_pango_layout(None)
+        layout.set_markup(markup, -1)
+        layout.set_alignment(Pango.Alignment.CENTER)
+        layout.set_ellipsize(Pango.EllipsizeMode.END)
+        layout.set_width(int(max(rect.get_width() - 8, 1) * Pango.SCALE))
+        _ink, logical = layout.get_pixel_extents()
+        snapshot.save()
+        origin = Graphene.Point()
+        origin.init(rect.get_x() + 4, rect.get_y() + (rect.get_height() - logical.height) / 2)
+        snapshot.translate(origin)
+        snapshot.append_layout(layout, color)
+        snapshot.restore()
 
 
 class Window(Adw.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="Monitörler")
-        self.set_default_size(470, 430)
+        super().__init__(application=app, title=_("Displays"))
+        self.set_default_size(480, 600)
 
-        self._p = monitorctl.proxy()
-        self._rows = []
-        self._populating = False
+        self._bus = monitorctl.bus()
+        self._settings = monitorctl.load_settings()
+        self._state = None
+        self._rows = {}  # connector -> (row, notify handler id)
         self._busy = False
+        self._pending = False
+        self._debounce_id = 0
+        self._spinner_id = 0
+        self._toast = None
+        self._undo = None
+        self._cancellable = Gio.Cancellable()
 
+        self._build()
+        self._install_actions()
+        self._style = Adw.StyleManager.get_default()
+        self._style_ids = [
+            self._style.connect(f"notify::{prop}", lambda *_: self.preview.queue_draw())
+            for prop in ("dark", "high-contrast", "accent-color-rgba")
+        ]
+        self._signal_id = self._bus.signal_subscribe(  # only Mutter itself, not any session client
+            monitorctl.BUS_NAME, monitorctl.INTERFACE, "MonitorsChanged", monitorctl.OBJECT_PATH,
+            None, Gio.DBusSignalFlags.NONE, self._on_monitors_changed,
+        )
+        # First paint shows real data: one synchronous call (~1 ms), every later refresh is async.
+        try:
+            self._show_state(monitorctl.get_state(self._bus))
+        except monitorctl.DisplayError as exc:
+            self._show_error(str(exc))
+
+    # ------------------------------------------------------------- widgets ----
+    def _build(self):
         header = Adw.HeaderBar()
+        menu = Gio.Menu()
+        menu.append(_("Refresh"), "win.refresh")
+        menu.append(_("About Monitor Toggle"), "app.about")
+        header.pack_end(Gtk.MenuButton(
+            icon_name="open-menu-symbolic", menu_model=menu, primary=True, tooltip_text=_("Main Menu"),
+        ))
+        self.spinner = Adw.Spinner(visible=False)
+        header.pack_end(self.spinner)
 
-        btn_all = Gtk.Button(label="Hepsini Aç")
-        btn_all.set_tooltip_text("Bağlı tüm monitörleri aç")
-        btn_all.add_css_class("flat")
-        btn_all.connect("clicked", self._on_all_on)
-        header.pack_start(btn_all)
+        self.preview = LayoutPreview()
+        preview_group = Adw.PreferencesGroup()
+        preview_group.add(self.preview)
 
-        btn_refresh = Gtk.Button(icon_name="view-refresh-symbolic")
-        btn_refresh.set_tooltip_text("Yenile")
-        btn_refresh.add_css_class("flat")
-        btn_refresh.connect("clicked", lambda *_: self.reload())
-        header.pack_end(btn_refresh)
+        self.displays = Adw.PreferencesGroup(title=_("Displays"))
+        self.all_on = Adw.ButtonRow(title=_("Turn All On"), start_icon_name="video-display-symbolic")
+        self.all_on.connect("activated", lambda *_: self._run("all"))
+        all_group = Adw.PreferencesGroup()
+        all_group.add(self.all_on)
+
+        self.persist_row = Adw.SwitchRow(title=_("Remember After Restart"), active=self._settings["persist"])
+        self.persist_row.connect("notify::active", self._on_persist_changed)
+        options = Adw.PreferencesGroup()
+        options.add(self.persist_row)
 
         page = Adw.PreferencesPage()
+        for group in (preview_group, self.displays, all_group, options):
+            page.add(group)
 
-        self.group = Adw.PreferencesGroup(
-            title="Bağlı Monitörler",
-            description="Kapatmak istediğin monitörün anahtarını kapat.",
-        )
-        page.add(self.group)
+        retry = Gtk.Button(label=_("Try Again"), halign=Gtk.Align.CENTER, css_classes=["pill", "suggested-action"])
+        retry.connect("clicked", lambda *_: self.reload())
+        self.status = Adw.StatusPage(icon_name="video-display-symbolic", title=_("Displays Unavailable"), child=retry)
 
-        opt = Adw.PreferencesGroup(title="Seçenekler")
-        self.persist_row = Adw.SwitchRow(
-            title="Kalıcı olarak hatırla",
-            subtitle="Açıkken verdiğin ayar yeniden başlatınca da korunur",
-        )
-        opt.add(self.persist_row)
-        page.add(opt)
+        self.stack = Gtk.Stack()
+        self.stack.add_named(page, "displays")
+        self.stack.add_named(self.status, "error")
 
-        self.toasts = Adw.ToastOverlay()
-        self.toasts.set_child(page)
-
-        toolbar = Adw.ToolbarView()
+        self.toasts = Adw.ToastOverlay(child=self.stack)
+        toolbar = Adw.ToolbarView(content=self.toasts)
         toolbar.add_top_bar(header)
-        toolbar.set_content(self.toasts)
         self.set_content(toolbar)
 
-        self.reload()
+    def _install_actions(self):
+        refresh = Gio.SimpleAction(name="refresh")
+        refresh.connect("activate", lambda *_: self.reload())
+        only = Gio.SimpleAction(name="only", parameter_type=GLib.VariantType("s"))
+        only.connect("activate", lambda _a, conn: self._run("only", conn.get_string()))
+        for action in (refresh, only):
+            self.add_action(action)
 
-    # ------------------------------------------------------------- yardımcı
-    def _toast(self, text):
-        self.toasts.add_toast(Adw.Toast(title=text, timeout=3))
+    def _new_row(self, conn):
+        row = Adw.SwitchRow(use_markup=False)
+        menu = Gio.Menu()
+        menu.append(_("Use Only This Display"), f"win.only::{conn}")
+        button = Gtk.MenuButton(
+            icon_name="view-more-symbolic", menu_model=menu, valign=Gtk.Align.CENTER,
+            css_classes=["flat"], tooltip_text=_("More Options"),
+        )
+        row.add_suffix(button)
+        handler = row.connect("notify::active", self._on_switch, conn)
+        self.displays.add(row)
+        return row, handler
 
-    def _clear_rows(self):
-        for row in self._rows:
-            self.group.remove(row)
-        self._rows = []
-
-    # -------------------------------------------------------------- yenile
+    # -------------------------------------------------------------- state ----
     def reload(self):
-        self._clear_rows()
+        """Fetch the current state asynchronously and update the window."""
+        if self._pending:
+            return
+        self._pending = True
+        self._bus.call(
+            monitorctl.BUS_NAME, monitorctl.OBJECT_PATH, monitorctl.INTERFACE, "GetCurrentState",
+            None, None, Gio.DBusCallFlags.NONE, monitorctl.CALL_TIMEOUT_MS, self._cancellable,
+            self._on_state_reply,
+        )
+
+    def _on_state_reply(self, bus, result):
+        self._pending = False
         try:
-            _serial, monitors, logicals, _props = monitorctl.get_state(self._p)
+            state = bus.call_finish(result).unpack()
         except GLib.Error as exc:
-            self._toast(f"Ekranlar okunamadı: {exc.message}")
+            if not exc.matches(Gio.io_error_quark(), Gio.IOErrorEnum.CANCELLED):
+                self._show_error(monitorctl.friendly_error(exc))
             return
+        self._show_state(state)
 
+    def _show_state(self, state):
+        self._state = state
+        _serial, monitors, logicals, _props = state
         enabled = monitorctl.enabled_map(logicals)
-        self._populating = True
-        for ident, _modes, _props in monitors:
-            conn, vendor, product, _sn = ident
+        known = monitorctl.connectors(monitors)
+
+        for conn in [c for c in self._rows if c not in known]:
+            row, handler = self._rows.pop(conn)
+            row.disconnect(handler)
+            self.displays.remove(row)
+        for conn in known:
+            row, handler = self._rows.get(conn) or self._rows.setdefault(conn, self._new_row(conn))
+            on = conn in enabled
+            primary = on and enabled[conn][2]
             mode = monitorctl.current_mode(monitors, conn)
-            res = f"{mode[1]}×{mode[2]}" if mode else "—"
-            marks = []
-            if enabled.get(conn, (0, 0, False))[2]:
-                marks.append("birincil")
-            if conn not in enabled:
-                marks.append("kapalı")
-            subtitle = " · ".join([f"{vendor} {product}", res, *marks])
+            details = [conn]
+            if mode:
+                details += [f"{mode[1]}×{mode[2]}", _("{rate} Hz").format(rate=round(mode[3]))]
+            if primary:
+                details.append(_("Primary"))
+            row.set_title(monitorctl.display_name(monitors, conn))
+            row.set_subtitle(" · ".join(details))
+            if row.get_active() != on:
+                with row.handler_block(handler):
+                    row.set_active(on)
 
-            row = Adw.SwitchRow(title=conn, subtitle=subtitle)
-            row.set_active(conn in enabled)
-            row.connect("notify::active", self._on_toggle, conn)
-            self.group.add(row)
-            self._rows.append(row)
-        self._populating = False
+        topo = monitorctl.full_topology(monitors, logicals, self._fresh_settings()["baseline"])
+        items = []
+        for conn in known:
+            lm = topo[conn]
+            w, h = monitorctl.logical_size(monitors, lm)
+            items.append((conn, lm[0], lm[1], w, h, conn in enabled, conn in enabled and enabled[conn][2]))
+        self.preview.set_items(items)
+        self.all_on.set_sensitive(len(enabled) < len(known))
+        self.stack.set_visible_child_name("displays")
 
-    # ------------------------------------------------------------- eylemler
-    def _on_toggle(self, row, _pspec, conn):
-        if self._populating or self._busy:
+    def _show_error(self, message):
+        self.status.set_description(message)
+        self.stack.set_visible_child_name("error")
+
+    def _on_monitors_changed(self, *_args):
+        if self._debounce_id or self._busy:
             return
-        self._busy = True
-        want = row.get_active()
-        try:
-            monitorctl.set_enabled(conn, want, persist=self.persist_row.get_active())
-            self._toast(f"{conn} {'açıldı' if want else 'kapatıldı'}")
-        except Exception as exc:  # noqa: BLE001
-            self._toast(f"Hata: {exc}")
-        finally:
-            self._busy = False
-            self.reload()
+        self._debounce_id = GLib.timeout_add(REFRESH_DEBOUNCE_MS, self._debounced_reload)
 
-    def _on_all_on(self, _btn):
+    def _debounced_reload(self):
+        self._debounce_id = 0
+        self.reload()
+        return GLib.SOURCE_REMOVE
+
+    # ------------------------------------------------------------ actions ----
+    def _on_switch(self, row, _pspec, conn):
+        self._run("on" if row.get_active() else "off", conn)
+
+    def _fresh_settings(self):
+        """Re-read from disk: the CLI may have saved a newer layout since the window opened."""
+        self._settings = monitorctl.load_settings()
+        return self._settings
+
+    def _on_persist_changed(self, row, _pspec):
+        settings = self._fresh_settings()
+        settings["persist"] = row.get_active()
+        monitorctl.save_settings(settings)
+
+    def _set_busy(self, busy):
+        self._busy = busy
+        self.displays.set_sensitive(not busy)
+        self.all_on.set_sensitive(not busy)
+        if self._spinner_id:
+            GLib.source_remove(self._spinner_id)
+            self._spinner_id = 0
+        if busy:
+            self._spinner_id = GLib.timeout_add(SPINNER_DELAY_MS, self._show_spinner)
+        else:
+            self.spinner.set_visible(False)
+
+    def _show_spinner(self):
+        self._spinner_id = 0
+        self.spinner.set_visible(True)
+        return GLib.SOURCE_REMOVE
+
+    def _run(self, action, connector=None):
+        """Re-read the state (Mutter rejects stale serials), then apply the change, all async."""
         if self._busy:
             return
-        self._busy = True
+        self._set_busy(True)
+        before = set(monitorctl.enabled_map(self._state[2])) if self._state else None
+        self._bus.call(
+            monitorctl.BUS_NAME, monitorctl.OBJECT_PATH, monitorctl.INTERFACE, "GetCurrentState",
+            None, None, Gio.DBusCallFlags.NONE, monitorctl.CALL_TIMEOUT_MS, self._cancellable,
+            self._on_fresh_state, (action, connector, before),
+        )
+
+    def _on_fresh_state(self, bus, result, request):
+        action, connector, before = request
+        persist = self.persist_row.get_active()
         try:
-            monitorctl.enable_all(persist=self.persist_row.get_active())
-            self._toast("Tüm monitörler açıldı")
-        except Exception as exc:  # noqa: BLE001
-            self._toast(f"Hata: {exc}")
-        finally:
-            self._busy = False
-            self.reload()
+            state = bus.call_finish(result).unpack()
+            serial, layout, settings = monitorctl.plan(state, self._fresh_settings(), action, connector)
+        except (GLib.Error, monitorctl.DisplayError) as exc:
+            self._finish(exc)
+            return
+        self._settings = settings
+        monitorctl.save_settings(settings)
+        bus.call(
+            monitorctl.BUS_NAME, monitorctl.OBJECT_PATH, monitorctl.INTERFACE, "ApplyMonitorsConfig",
+            monitorctl.apply_params(serial, layout, persist), None, Gio.DBusCallFlags.NONE,
+            monitorctl.CALL_TIMEOUT_MS, self._cancellable, self._on_applied, (action, connector, before, persist),
+        )
+
+    def _on_applied(self, bus, result, request):
+        action, connector, before, persist = request
+        try:
+            bus.call_finish(result)
+        except GLib.Error as exc:
+            self._finish(exc)
+            return
+        self._finish(None)
+        self._confirm(action, connector, before, persist)
+
+    def _finish(self, error):
+        self._set_busy(False)
+        if error is not None and not (
+            isinstance(error, GLib.Error) and error.matches(Gio.io_error_quark(), Gio.IOErrorEnum.CANCELLED)
+        ):
+            self._notify(monitorctl.friendly_error(error))
+        self.reload()
+
+    def _confirm(self, action, connector, before, persist):
+        name = monitorctl.display_name(self._state[1], connector) if connector else ""
+        if persist:
+            self._notify(monitorctl.PERSIST_HINT)
+            return
+        texts = {
+            "off": _("{name} turned off").format(name=name),
+            "only": _("Only {name} is on").format(name=name),
+        }
+        if action in texts and before:
+            self._notify(texts[action], undo=lambda: self._run("set", sorted(before)))
+
+    def _notify(self, text, undo=None):
+        """Reuse one toast: rapid changes update it in place instead of stacking new toast widgets."""
+        self._undo = undo
+        toast = self._toast
+        if toast is None:
+            toast = Adw.Toast(use_markup=False)
+            toast.connect("button-clicked", self._on_undo_clicked)
+            toast.connect("dismissed", self._on_toast_dismissed)
+            self._toast = toast
+        toast.set_title(text)
+        toast.set_button_label(_("Undo") if undo else None)
+        toast.set_timeout(5 if undo else 3)
+        self.toasts.add_toast(toast)
+
+    def _on_undo_clicked(self, _toast):
+        undo, self._undo = self._undo, None
+        if undo is not None:
+            undo()
+
+    def _on_toast_dismissed(self, toast):
+        if self._toast is toast:
+            self._toast = None
+            self._undo = None
+
+    def do_close_request(self):
+        self._cancellable.cancel()
+        self._bus.signal_unsubscribe(self._signal_id)
+        for handler in self._style_ids:
+            self._style.disconnect(handler)
+        for source in (self._debounce_id, self._spinner_id):
+            if source:
+                GLib.source_remove(source)
+        self._debounce_id = self._spinner_id = 0
+        return False
 
 
 class App(Adw.Application):
     def __init__(self):
         super().__init__(application_id=APP_ID)
+        about = Gio.SimpleAction(name="about")
+        about.connect("activate", self._on_about)
+        quit_ = Gio.SimpleAction(name="quit")
+        quit_.connect("activate", lambda *_: self.quit())
+        for action in (about, quit_):
+            self.add_action(action)
+        self.set_accels_for_action("win.refresh", ["<Control>r", "F5"])
+        self.set_accels_for_action("window.close", ["<Control>w"])
+        self.set_accels_for_action("app.quit", ["<Control>q"])
 
     def do_activate(self):
         win = self.props.active_window or Window(self)
         win.present()
 
+    def _on_about(self, *_args):
+        Adw.AboutDialog(
+            application_name=_("Monitor Toggle"), application_icon="video-display", version=VERSION,
+            developer_name="Anıl Soylu", license_type=Gtk.License.MIT_X11, website=WEBSITE,
+            issue_url=f"{WEBSITE}/issues",
+        ).present(self.props.active_window)
+
 
 if __name__ == "__main__":
+    problem = missing_requirement()
+    if problem:
+        sys.exit(problem)
+    if sys.argv[1:] == ["--check"]:
+        sys.exit(0)
     raise SystemExit(App().run(None))

@@ -1,60 +1,64 @@
 #!/usr/bin/env python3
-"""monitor -- GNOME/Wayland monitör aç/kapat (komut satırı).
+"""monitor: turn GNOME (Wayland) displays on and off from the command line.
 
-  monitor list                 # bağlı monitörler
-  monitor off DP-1 [--persist] # monitörü kapat
-  monitor on  [DP-1] [--persist]  # monitörü (ya da hepsini) aç
+  monitor list                     connected displays
+  monitor off DP-1 [--persist]     turn a display off
+  monitor on [DP-1] [--persist]    turn a display (or all of them) on
+  monitor only DP-1 [--persist]    keep only this display on
 """
 import argparse
 import sys
 
 import monitorctl
+from monitorctl import _
 
 
 def cmd_list():
     _serial, monitors, logicals, _props = monitorctl.get_state()
     enabled = monitorctl.enabled_map(logicals)
-    print("Bağlı monitörler:")
-    for ident, _modes, _props in monitors:
-        conn, vendor, product, _sn = ident
+    print(_("Connected displays:"))
+    for ident, _modes, _p in monitors:
+        conn, vendor, product, _serial_no = ident
         mode = monitorctl.current_mode(monitors, conn)
-        res = f"{mode[1]}x{mode[2]}" if mode else "-"
+        res = f"{mode[1]}x{mode[2]}@{mode[3]:.0f}Hz" if mode else "-"
         on = conn in enabled
-        prim = " (primary)" if enabled.get(conn, (0, 0, False))[2] else ""
-        state = "AÇIK " if on else "kapalı"
-        print(f"  {'*' if on else ' '} {conn:<6} {vendor} {product:<14} {state} {res}{prim}")
+        primary = f" ({_('primary')})" if on and enabled[conn][2] else ""
+        state = _("on") if on else _("off")
+        print(f"  {'*' if on else ' '} {conn:<8} {vendor} {product:<16} {state:<4} {res}{primary}")
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="monitor", description=__doc__)
+    ap = argparse.ArgumentParser(prog="monitor", description=_("Turn GNOME displays on and off."))
     sub = ap.add_subparsers(dest="cmd", required=True)
-
-    sub.add_parser("list", help="bağlı monitörleri listeler")
-
-    p_off = sub.add_parser("off", help="bir monitörü kapatır")
-    p_off.add_argument("connector", help="örn: DP-1, HDMI-A-1")
-    p_off.add_argument("--persist", action="store_true", help="yeniden girişte de kapalı kalsın")
-
-    p_on = sub.add_parser("on", help="monitörü (argümansız: hepsini) açar")
-    p_on.add_argument("connector", nargs="?", help="örn: DP-1 (boş bırakılırsa tümü)")
-    p_on.add_argument("--persist", action="store_true", help="kalıcı olarak aç")
-
+    sub.add_parser("list", help=_("list connected displays"))
+    for name, nargs, text in (
+        ("off", None, _("turn a display off")),
+        ("on", "?", _("turn a display on (all displays without an argument)")),
+        ("only", None, _("keep only this display on")),
+    ):
+        p = sub.add_parser(name, help=text)
+        p.add_argument("connector", nargs=nargs, help=_("for example DP-1 or HDMI-A-1"))
+        p.add_argument("--persist", action="store_true", help=_("keep the change after logging out"))
     args = ap.parse_args()
+
     try:
         if args.cmd == "list":
             cmd_list()
-        elif args.cmd == "off":
-            monitorctl.set_enabled(args.connector, False, persist=args.persist)
-            print(f"{args.connector} kapatıldı. Geri açmak için:  monitor on {args.connector}")
-        elif args.cmd == "on":
-            if args.connector:
-                monitorctl.set_enabled(args.connector, True, persist=args.persist)
-                print(f"{args.connector} açıldı.")
-            else:
-                monitorctl.enable_all(persist=args.persist)
-                print("Tüm monitörler açıldı.")
-    except Exception as exc:  # noqa: BLE001
-        sys.exit(f"Hata: {exc}")
+            return
+        action = "all" if args.cmd == "on" and not args.connector else args.cmd
+        monitorctl.run(action, args.connector, persist=args.persist)
+    except monitorctl.DisplayError as exc:
+        sys.exit(_("Error: {message}").format(message=exc))
+
+    messages = {
+        "on": _("{connector} turned on."),
+        "off": _("{connector} turned off. Turn it back on with: monitor on {connector}"),
+        "only": _("Only {connector} is on now."),
+        "all": _("All displays turned on."),
+    }
+    print(messages[action].format(connector=args.connector))
+    if args.persist:
+        print(monitorctl.PERSIST_HINT)
 
 
 if __name__ == "__main__":
