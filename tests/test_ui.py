@@ -8,26 +8,9 @@ import subprocess
 import sys
 import unittest
 
-from test_integration import ROOT, STATE_FILES, layout
-from gi.repository import Gio, GLib
+from test_integration import ROOT, STATE_FILES, layout, reset_layout
 
 import ui_harness as h
-
-
-def apply_row(order):
-    """Lay the displays out left to right in `order`, first one primary."""
-    bus = Gio.bus_get_sync(Gio.BusType.SESSION)
-    args = ("org.gnome.Mutter.DisplayConfig", "/org/gnome/Mutter/DisplayConfig", "org.gnome.Mutter.DisplayConfig")
-    serial, monitors, _logicals, _props = bus.call_sync(
-        *args, "GetCurrentState", None, None, Gio.DBusCallFlags.NONE, -1, None
-    ).unpack()
-    modes = {ident[0]: next(m for m in ms if m[6].get("is-preferred")) for ident, ms, _p in monitors}
-    x, logicals = 0, []
-    for conn in order:
-        logicals.append((x, 0, 1.0, 0, not logicals, [(conn, modes[conn][0], {})]))
-        x += modes[conn][1]
-    params = GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})", (serial, 1, logicals, {}))
-    bus.call_sync(*args, "ApplyMonitorsConfig", params, None, Gio.DBusCallFlags.NONE, -1, None)
 
 
 def cli(*args):
@@ -48,7 +31,7 @@ class WindowTest(unittest.TestCase):
     def setUp(self):
         for path in STATE_FILES:
             path.unlink(missing_ok=True)
-        apply_row(["Meta-2", "Meta-0", "Meta-1"])
+        reset_layout(["Meta-2", "Meta-0", "Meta-1"])
         self.win = self.ui.Window(self.app)  # opened with no saved layout
         self.win.present()
         h.settle(self.win)

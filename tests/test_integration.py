@@ -29,18 +29,18 @@ def cli(*args):
     )
 
 
-def reset_layout():
-    """Apply Meta-0 | Meta-1 | Meta-2 side by side, Meta-0 primary, straight over D-Bus."""
+def reset_layout(order=("Meta-0", "Meta-1", "Meta-2")):
+    """Lay the displays out left to right in `order`, first one primary, straight over D-Bus."""
     bus = Gio.bus_get_sync(Gio.BusType.SESSION)
     args = ("org.gnome.Mutter.DisplayConfig", "/org/gnome/Mutter/DisplayConfig", "org.gnome.Mutter.DisplayConfig")
     serial, monitors, _logicals, _props = bus.call_sync(
         *args, "GetCurrentState", None, None, Gio.DBusCallFlags.NONE, -1, None
     ).unpack()
+    modes = {ident[0]: next(m for m in ms if m[6].get("is-preferred")) for ident, ms, _p in monitors}
     x, logicals = 0, []
-    for ident, modes, _p in monitors:
-        mode = next(m for m in modes if m[6].get("is-preferred"))
-        logicals.append((x, 0, 1.0, 0, not logicals, [(ident[0], mode[0], {})]))
-        x += mode[1]
+    for conn in order:
+        logicals.append((x, 0, 1.0, 0, not logicals, [(conn, modes[conn][0], {})]))
+        x += modes[conn][1]
     params = GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})", (serial, 1, logicals, {}))
     bus.call_sync(*args, "ApplyMonitorsConfig", params, None, Gio.DBusCallFlags.NONE, -1, None)
 
