@@ -24,8 +24,11 @@ def load_ui():
 
 
 def rows(win):
+    """{connector: row}. Older windows keep a list of rows, newer ones {connector: (row, handler_id)}."""
     found = win._rows
-    return dict(found) if isinstance(found, dict) else {r.get_title(): r for r in found}
+    if isinstance(found, dict):
+        return {conn: value[0] if isinstance(value, tuple) else value for conn, value in found.items()}
+    return {r.get_title(): r for r in found}
 
 
 def row_for(win, connector):
@@ -42,7 +45,7 @@ def settle(win, timeout=10.0):
     while GLib.get_monotonic_time() < deadline:
         while ctx.iteration(False):
             pass
-        if not getattr(win, "_busy", False) and not getattr(win, "_pending", False):
+        if not any(getattr(win, flag, False) for flag in ("_busy", "_pending", "_debounce_id")):
             return
         ctx.iteration(True)
     raise TimeoutError("window did not settle")

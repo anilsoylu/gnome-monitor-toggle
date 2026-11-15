@@ -98,6 +98,10 @@ class PackTest(unittest.TestCase):
         _serial, layout, _settings = self.plan(ALL_ON, rotated, "off", "DP-2")
         self.assertEqual(positions(layout), [("DP-1", 0, 0, True), ("HDMI-1", 1080, 0, False)])
 
+    def test_set_restores_an_explicit_selection(self):
+        _serial, layout, _settings = self.plan(ALL_ON, ROW[:1], "set", ["DP-1", "HDMI-1"])
+        self.assertEqual(positions(layout), [("DP-1", 0, 0, True), ("HDMI-1", 1920, 0, False)])
+
     def test_last_display_cannot_be_turned_off(self):
         with self.assertRaises(monitorctl.DisplayError):
             self.plan([with_current(DP1)], [logical(0, 0, True, "DP-1")], "off", "DP-1")
@@ -123,6 +127,14 @@ class PackTest(unittest.TestCase):
         _serial, layout, _settings = self.plan(partly, live, "on", "DP-1", baseline=baseline)
         self.assertEqual(
             positions(layout), [("DP-1", 0, 0, True), ("DP-2", 1920, 0, False), ("HDMI-1", 3840, 0, False)]
+        )
+
+    def test_without_saved_layout_live_positions_are_kept(self):
+        partly = [with_current(DP1), with_current(DP2), HDMI]
+        stack = [logical(0, 0, True, "DP-1"), logical(0, 1080, False, "DP-2")]
+        _serial, layout, _settings = self.plan(partly, stack, "on", "HDMI-1")
+        self.assertEqual(
+            positions(layout), [("DP-1", 0, 0, True), ("HDMI-1", 1920, 0, False), ("DP-2", 0, 1080, False)]
         )
 
     def test_all_on_layout_becomes_the_new_baseline(self):

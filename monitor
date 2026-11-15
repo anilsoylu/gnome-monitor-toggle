@@ -12,8 +12,6 @@ import sys
 import monitorctl
 from monitorctl import _
 
-PERSIST_HINT = _("Confirm \"Keep Changes\" in the GNOME dialog within 20 seconds, or it is reverted.")
-
 
 def cmd_list():
     _serial, monitors, logicals, _props = monitorctl.get_state()
@@ -60,7 +58,7 @@ def main():
     }
     print(messages[action].format(connector=args.connector))
     if args.persist:
-        print(PERSIST_HINT)
+        print(monitorctl.PERSIST_HINT)
 
 
 if __name__ == "__main__":

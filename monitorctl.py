@@ -39,6 +39,9 @@ def _locale_dir():
 _ = gettext.translation(GETTEXT_DOMAIN, _locale_dir(), fallback=True).gettext
 
 
+PERSIST_HINT = _("Confirm “Keep Changes” in the GNOME dialog within 20 seconds, or the change is reverted.")
+
+
 class DisplayError(Exception):
     """An error with a message that is safe to show to the user."""
 
@@ -57,6 +60,8 @@ def friendly_error(error):
     if remote.endswith(("ServiceUnknown", "NameHasNoOwner")):
         return _("GNOME display settings are not available in this session.")
     if remote.endswith("AccessDenied"):
+        if "disabled" in error.message:
+            return _("Changing displays over D-Bus is disabled on this system.")
         return _("The display setup changed in the meantime. Try again.")
     if remote.endswith("InvalidArgs"):
         Gio.DBusError.strip_remote_error(error)
@@ -132,7 +137,7 @@ def _mode_id(monitors, connector):
     return mode[0] if mode else None
 
 
-def _logical_size(monitors, lm):
+def logical_size(monitors, lm):
     """(width, height) of a logical monitor entry in layout coordinates."""
     mode = current_mode(monitors, lm[5][0][0])
     width, height = (mode[1], mode[2]) if mode else (1920, 1080)
@@ -157,8 +162,9 @@ def full_topology(monitors, logicals, baseline=None):
     """Layout of every connected display, on or off: {connector: entry}.
 
     With every display on, the live layout is the answer (and becomes the new baseline). Otherwise
-    saved positions are used so displays come back where they were; a display that is neither saved
-    nor on goes to the right of everything else. Modes always come from the live state.
+    saved positions are used so displays come back where they were (live positions when nothing is
+    saved yet); any other display goes to the right of everything else. Modes always come from the
+    live state.
     """
     baseline = baseline or {}
     known = connectors(monitors)
@@ -171,14 +177,15 @@ def full_topology(monitors, logicals, baseline=None):
         return {conn: live[conn] for conn in known}
 
     saved = {conn: _copy_entry(baseline[conn]) for conn in known if conn in baseline}
-    topo = dict(saved)
-    right = max((lm[0] + _logical_size(monitors, lm)[0] for lm in saved.values()), default=0)
+    # Nothing saved yet: the live displays already form a valid layout, so keep their positions.
+    topo = saved or {conn: lm for conn, lm in live.items() if conn in known}
+    right = max((lm[0] + logical_size(monitors, lm)[0] for lm in topo.values()), default=0)
     for conn in known:
         if conn in topo:
             continue
         lm = live.get(conn) or _entry(0, 0, 1.0, 0, False, conn, _mode_id(monitors, conn))
         lm[0], lm[1] = right, 0
-        right += _logical_size(monitors, lm)[0]
+        right += logical_size(monitors, lm)[0]
         topo[conn] = lm
     for conn in known:
         topo[conn][5] = [(conn, _mode_id(monitors, conn), {})]
@@ -208,7 +215,7 @@ def pack(topo, enabled, monitors):
     if not enabled:
         raise DisplayError(_("At least one display must stay on."))
     entries = sorted((_copy_entry(topo[c]) for c in enabled), key=lambda lm: (lm[1], lm[0]))
-    sizes = [_logical_size(monitors, lm) for lm in entries]
+    sizes = [logical_size(monitors, lm) for lm in entries]
     for axis in (0, 1):
         _close_gaps(entries, axis, sizes)
     primary = next((lm for lm in entries if lm[4]), entries[0])
@@ -254,11 +261,15 @@ def save_settings(settings, path=None):
 def plan(state, settings, action, connector=None):
     """Compute (serial, layout, new_settings) for an action without touching D-Bus.
 
-    action: "on" | "off" | "only" | "all".
+    action: "on" | "off" | "only" | "all", or "set" with `connector` being the collection of
+    connectors that should end up on (used to undo a change).
     """
     serial, monitors, logicals, _props = state
     known = connectors(monitors)
-    if connector is not None and connector not in known:
+    wanted = set(connector) if action == "set" else {connector} - {None}
+    missing = sorted(wanted - set(known))
+    if missing:
+        connector = missing[0]
         raise DisplayError(_("'{connector}' is not connected.").format(connector=connector))
 
     topo = full_topology(monitors, logicals, settings["baseline"])
@@ -271,6 +282,8 @@ def plan(state, settings, action, connector=None):
         enabled = {connector}
     elif action == "all":
         enabled = set(known)
+    elif action == "set":
+        enabled = wanted
     else:
         raise ValueError(action)
     return serial, pack(topo, enabled, monitors), {**settings, "baseline": topo}

@@ -1,0 +1,202 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the monitor-toggle package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: monitor-toggle 1.1.0\n"
+"Report-Msgid-Bugs-To: https://github.com/anilsoylu/gnome-monitor-toggle/"
+"issues\n"
+"POT-Creation-Date: 2026-11-15 20:49+0000\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: monitorctl.py:42
+msgid ""
+"Confirm “Keep Changes” in the GNOME dialog within 20 seconds, or the change "
+"is reverted."
+msgstr ""
+
+#: monitorctl.py:61
+msgid "GNOME display settings are not available in this session."
+msgstr ""
+
+#: monitorctl.py:64
+msgid "Changing displays over D-Bus is disabled on this system."
+msgstr ""
+
+#: monitorctl.py:65
+msgid "The display setup changed in the meantime. Try again."
+msgstr ""
+
+#: monitorctl.py:68
+#, python-brace-format
+msgid "GNOME rejected this layout: {reason}"
+msgstr ""
+
+#: monitorctl.py:216
+msgid "At least one display must stay on."
+msgstr ""
+
+#: monitorctl.py:273
+#, python-brace-format
+msgid "'{connector}' is not connected."
+msgstr ""
+
+#: monitor:19
+msgid "Connected displays:"
+msgstr ""
+
+#: monitor:25
+msgid "primary"
+msgstr ""
+
+#: monitor:26
+msgid "on"
+msgstr ""
+
+#: monitor:26
+msgid "off"
+msgstr ""
+
+#: monitor:31
+msgid "Turn GNOME displays on and off."
+msgstr ""
+
+#: monitor:33
+msgid "list connected displays"
+msgstr ""
+
+#: monitor:35
+msgid "turn a display off"
+msgstr ""
+
+#: monitor:36
+msgid "turn a display on (all displays without an argument)"
+msgstr ""
+
+#: monitor:37
+msgid "keep only this display on"
+msgstr ""
+
+#: monitor:40
+msgid "for example DP-1 or HDMI-A-1"
+msgstr ""
+
+#: monitor:41
+msgid "keep the change after logging out"
+msgstr ""
+
+#: monitor:51
+#, python-brace-format
+msgid "Error: {message}"
+msgstr ""
+
+#: monitor:54
+#, python-brace-format
+msgid "{connector} turned on."
+msgstr ""
+
+#: monitor:55
+#, python-brace-format
+msgid "{connector} turned off. Turn it back on with: monitor on {connector}"
+msgstr ""
+
+#: monitor:56
+#, python-brace-format
+msgid "Only {connector} is on now."
+msgstr ""
+
+#: monitor:57
+msgid "All displays turned on."
+msgstr ""
+
+#: monitor-ui:35
+#, python-brace-format
+msgid ""
+"Monitor Toggle needs GTK {gtk} and libadwaita {adw} or newer (GNOME 47+); "
+"found GTK {found_gtk} and libadwaita {found_adw}. The monitor command still "
+"works."
+msgstr ""
+
+#: monitor-ui:57
+msgid "Display layout"
+msgstr ""
+
+#: monitor-ui:103 monitor-ui:263
+msgid "Primary"
+msgstr ""
+
+#: monitor-ui:103
+msgid "Off"
+msgstr ""
+
+#: monitor-ui:125 monitor-ui:173
+msgid "Displays"
+msgstr ""
+
+#: monitor-ui:161
+msgid "Refresh"
+msgstr ""
+
+#: monitor-ui:162
+msgid "About Monitor Toggle"
+msgstr ""
+
+#: monitor-ui:164
+msgid "Main Menu"
+msgstr ""
+
+#: monitor-ui:174
+msgid "Turn All On"
+msgstr ""
+
+#: monitor-ui:179
+msgid "Remember After Restart"
+msgstr ""
+
+#: monitor-ui:188
+msgid "Try Again"
+msgstr ""
+
+#: monitor-ui:190
+msgid "Displays Unavailable"
+msgstr ""
+
+#: monitor-ui:212
+msgid "Use Only This Display"
+msgstr ""
+
+#: monitor-ui:215
+msgid "More Options"
+msgstr ""
+
+#: monitor-ui:261
+#, python-brace-format
+msgid "{rate} Hz"
+msgstr ""
+
+#: monitor-ui:378
+#, python-brace-format
+msgid "{name} turned off"
+msgstr ""
+
+#: monitor-ui:379
+#, python-brace-format
+msgid "Only {name} is on"
+msgstr ""
+
+#: monitor-ui:394
+msgid "Undo"
+msgstr ""
+
+#: monitor-ui:439
+msgid "Monitor Toggle"
+msgstr ""
