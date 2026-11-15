@@ -16,7 +16,7 @@ class Window(Adw.ApplicationWindow):
         super().__init__(application=app, title="Monitörler")
         self.set_default_size(470, 430)
 
-        self._p = monitorctl.proxy()
+        self._bus = monitorctl.bus()
         self._rows = []
         self._populating = False
         self._busy = False
@@ -74,9 +74,9 @@ class Window(Adw.ApplicationWindow):
     def reload(self):
         self._clear_rows()
         try:
-            _serial, monitors, logicals, _props = monitorctl.get_state(self._p)
-        except GLib.Error as exc:
-            self._toast(f"Ekranlar okunamadı: {exc.message}")
+            _serial, monitors, logicals, _props = monitorctl.get_state(self._bus)
+        except monitorctl.DisplayError as exc:
+            self._toast(f"Ekranlar okunamadı: {exc}")
             return
 
         enabled = monitorctl.enabled_map(logicals)
@@ -106,7 +106,7 @@ class Window(Adw.ApplicationWindow):
         self._busy = True
         want = row.get_active()
         try:
-            monitorctl.set_enabled(conn, want, persist=self.persist_row.get_active())
+            monitorctl.run("on" if want else "off", conn, persist=self.persist_row.get_active(), connection=self._bus)
             self._toast(f"{conn} {'açıldı' if want else 'kapatıldı'}")
         except Exception as exc:  # noqa: BLE001
             self._toast(f"Hata: {exc}")
@@ -119,7 +119,7 @@ class Window(Adw.ApplicationWindow):
             return
         self._busy = True
         try:
-            monitorctl.enable_all(persist=self.persist_row.get_active())
+            monitorctl.run("all", persist=self.persist_row.get_active(), connection=self._bus)
             self._toast("Tüm monitörler açıldı")
         except Exception as exc:  # noqa: BLE001
             self._toast(f"Hata: {exc}")
